@@ -15,7 +15,7 @@ Today is {date}.
 
 ## Task
 
-Your task is to search the web and find relevant information of a given AI conference and edit the YAML file accordingly, if possible. We have git cloned the repository so that it is accessible to you.
+Your task is to search the web and find relevant information of a given AI conference and edit the YAML file accordingly, if possible. We have forked and git cloned the repository so that it is accessible to you using the username "NielsRogge".
 When editing, create a new branch as explained in the [Use of git](#use-of-git) section.
 
 ## App README
@@ -77,7 +77,7 @@ If a conference still uses the legacy "deadline:" and "abstract_deadline" format
 
 ## Use of git
 
-After making changes, create a branch called "feature/update_{conference_name}" and push it to Github using the following commands:
+After making changes, create a branch called "feature/update_{conference_name}" on the fork and push it to Github using the following commands:
 
 ```bash
 git checkout -b feature/update_{conference_name}

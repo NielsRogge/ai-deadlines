@@ -135,24 +135,26 @@ async def find_conference_deadlines(conference_name: str) -> None:
         settings_path = Path.home() / ".claude" / "settings.local.json"
     settings_path = str(settings_path)
     
-    # Configure Exa MCP server for web search capabilities
+    # Configure Exa MCP server for web search capabilities (only if API key is available)
     # See: https://docs.exa.ai/reference/exa-mcp
     exa_api_key = os.environ.get("EXA_API_KEY", "")
-    # ?exaApiKey={exa_api_key}
-    exa_mcp_url = f"https://mcp.exa.ai/mcp"
+    mcp_servers: dict[str, McpHttpServerConfig] | None = None
     
-    mcp_servers: dict[str, McpHttpServerConfig] = {
-        "exa": McpHttpServerConfig(
-            type="http",
-            url=exa_mcp_url,
-        )
-    }
-    
+    if exa_api_key:
+        exa_mcp_url = f"https://mcp.exa.ai/mcp?exaApiKey={exa_api_key}"
+        mcp_servers = {
+            "exa": McpHttpServerConfig(
+                type="http",
+                url=exa_mcp_url,
+            )
+        }
+
     options = ClaudeAgentOptions(
         system_prompt=system_prompt,
         permission_mode="bypassPermissions",
         settings=settings_path,
         mcp_servers=mcp_servers,
+        cwd=str(PROJECT_ROOT),
     )
 
     # Run the agent query
@@ -168,7 +170,7 @@ async def find_conference_deadlines(conference_name: str) -> None:
     print(f"User prompt length: {len(user_prompt)}")
     print(f"User prompt preview: {user_prompt[:200]}...")
     print(f"Conference data loaded: {len(conference_data)} characters")
-    print(f"Exa MCP server configured: {'Yes (API key set)' if exa_api_key else 'Yes (no API key)'}")
+    print(f"Exa MCP server configured: {'Yes' if exa_api_key else 'No (EXA_API_KEY not set)'}")
 
     message_count = 0
     try:
