@@ -21,10 +21,8 @@ Setup:
 1. Install Modal: uv add modal
 2. Authenticate: uv run modal setup
 3. Create secrets:
-   uv run modal secret create anthropic-base-url ANTHROPIC_BASE_URL=<your-base-url>
    uv run modal secret create anthropic ANTHROPIC_API_KEY=<your-key>
    uv run modal secret create github-pat GITHUB_PAT=<token-with-repo-and-pr-scope>
-   uv run modal secret create exa EXA_API_KEY=<your-key>  # optional
 
 Note: The GITHUB_PAT token needs the following scopes:
   - `repo` - for cloning and pushing to the repository
@@ -105,10 +103,8 @@ app = modal.App(
     name="conference-deadlines-agent",
     image=image,
     secrets=[
-        modal.Secret.from_name("anthropic-base-url"),
         modal.Secret.from_name("anthropic"),
         modal.Secret.from_name("github-pat"),
-        modal.Secret.from_name("exa", required=False),
     ],
 )
 
@@ -163,7 +159,7 @@ def setup_git_and_clone():
 
 
 @app.function(timeout=600)
-def process_single_conference(conference_name: str) -> dict:
+async def process_single_conference(conference_name: str) -> dict:
     """Process a single conference using the Claude Agent SDK.
     
     The agent will update the conference data and handle git add/commit/push.
@@ -174,7 +170,6 @@ def process_single_conference(conference_name: str) -> dict:
     Returns:
         A dictionary containing the processing result.
     """
-    import asyncio
     import os
     import pwd
     import sys
@@ -188,31 +183,86 @@ def process_single_conference(conference_name: str) -> dict:
     # Setup git and clone/pull repo
     setup_git_and_clone()
 
-    # Add the app directory to the path for imports
-    sys.path.insert(0, "/home/agent/app")
-    sys.path.insert(0, REPO_DIR)
-
+    # Set PROJECT_ROOT to the cloned repo (where conference data lives)
+    os.environ["PROJECT_ROOT"] = REPO_DIR
+    
     # Change to repo directory so relative paths work
     os.chdir(REPO_DIR)
 
-    # Import and run the agent
+    # Add the mounted app directory to the path for imports (has latest agent code)
+    # Insert at position 0 so it takes priority over the cloned repo
+    sys.path.insert(0, "/home/agent/app")
+
+    # Test if the bundled Claude CLI works
+    import subprocess
+    cli_path = "/usr/local/lib/python3.12/site-packages/claude_agent_sdk/_bundled/claude"
+    print(f"[debug] Testing CLI at: {cli_path}")
+    print(f"[debug] CLI exists: {os.path.exists(cli_path)}")
+    if os.path.exists(cli_path):
+        try:
+            result = subprocess.run([cli_path, "--version"], capture_output=True, text=True, timeout=10)
+            print(f"[debug] CLI version stdout: {result.stdout}")
+            print(f"[debug] CLI version stderr: {result.stderr}")
+            print(f"[debug] CLI version returncode: {result.returncode}")
+        except Exception as e:
+            print(f"[debug] CLI test error: {e}")
+    
+    # Check environment
+    api_key = os.environ.get('ANTHROPIC_API_KEY', '')
+    if api_key:
+        # Print masked key (first 8 and last 4 chars)
+        masked = f"{api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else "***"
+        print(f"[debug] ANTHROPIC_API_KEY: {masked} (length: {len(api_key)})")
+    else:
+        print(f"[debug] ANTHROPIC_API_KEY: NOT SET!")
+    print(f"[debug] HOME: {os.environ.get('HOME')}")
+    print(f"[debug] USER: {os.environ.get('USER')}")
+    print(f"[debug] Current user uid: {os.getuid()}")
+    
+    # Test the API key with a simple request
+    import urllib.request
+    import json
+    print("[debug] Testing API key with simple request...")
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages",
+            data=json.dumps({
+                "model": "claude-sonnet-4-5-20250929",
+                "max_tokens": 10,
+                "messages": [{"role": "user", "content": "Say hi"}]
+            }).encode(),
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
+            print(f"[debug] API test SUCCESS: {result.get('content', [{}])[0].get('text', '')[:50]}")
+    except urllib.error.HTTPError as e:
+        error_body = e.read().decode() if e.fp else "No body"
+        print(f"[debug] API test FAILED: HTTP {e.code} - {error_body[:200]}")
+    except Exception as e:
+        print(f"[debug] API test FAILED: {type(e).__name__}: {e}")
+
+    # Import and run the agent (from mounted app, using PROJECT_ROOT env var for data)
     from agents.agent import find_conference_deadlines
 
-    async def _process():
-        try:
-            await find_conference_deadlines(conference_name)
-            return {
-                "conference": conference_name,
-                "status": "completed",
-            }
-        except Exception as e:
-            return {
-                "conference": conference_name,
-                "status": "error",
-                "error": str(e),
-            }
-
-    return asyncio.run(_process())
+    try:
+        await find_conference_deadlines(conference_name)
+        return {
+            "conference": conference_name,
+            "status": "completed",
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {
+            "conference": conference_name,
+            "status": "error",
+            "error": str(e),
+        }
 
 
 @app.function(timeout=43200)  # 12 hours max for all conferences

@@ -10,15 +10,21 @@ uv run --env-file keys.env -m agents.agent --conference_name <name>
 import argparse
 import asyncio
 from datetime import datetime
+import logging
 import os
 from pathlib import Path
 
 import aiofiles
 
+# Enable info logging (debug is too noisy with Modal's grpc)
+logging.basicConfig(level=logging.INFO)
+# os.environ["ANTHROPIC_LOG"] = "debug"  # Uncomment for SDK debug logs
+
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
+    SystemMessage,
     TextBlock,
     ToolResultBlock,
     ToolUseBlock,
@@ -30,8 +36,8 @@ from claude_agent_sdk.types import McpHttpServerConfig
 # Script directory for resolving relative paths
 SCRIPT_DIR = Path(__file__).parent
 
-# Project root directory (parent of agents/)
-PROJECT_ROOT = SCRIPT_DIR.parent
+# Project root directory - use environment variable if set (for Modal), otherwise use parent of agents/
+PROJECT_ROOT = Path(os.environ.get("PROJECT_ROOT", SCRIPT_DIR.parent))
 
 
 async def read_prompt(filename: str) -> str:
@@ -159,6 +165,8 @@ async def find_conference_deadlines(conference_name: str) -> None:
     print(f"Starting agent query with settings: {settings_path}")
     print(f"Settings path exists: {Path(settings_path).exists()}")
     print(f"System prompt length: {len(system_prompt)}")
+    print(f"User prompt length: {len(user_prompt)}")
+    print(f"User prompt preview: {user_prompt[:200]}...")
     print(f"Conference data loaded: {len(conference_data)} characters")
     print(f"Exa MCP server configured: {'Yes (API key set)' if exa_api_key else 'Yes (no API key)'}")
 
@@ -169,7 +177,18 @@ async def find_conference_deadlines(conference_name: str) -> None:
             options=options,
         ):
             message_count += 1
-            if isinstance(message, AssistantMessage):
+            # Debug: print message type
+            print(f"[debug] Message {message_count}: {type(message).__name__}")
+            if isinstance(message, SystemMessage):
+                print(f"[debug] SystemMessage subtype: {message.subtype}")
+                if hasattr(message, 'data') and message.data:
+                    # Print key fields from init message
+                    data = message.data
+                    if isinstance(data, dict):
+                        print(f"[debug]   model: {data.get('model')}")
+                        print(f"[debug]   apiKeySource: {data.get('apiKeySource')}")
+                        print(f"[debug]   tools count: {len(data.get('tools', []))}")
+            elif isinstance(message, AssistantMessage):
                 # Determine which agent is making this call
                 if message.parent_tool_use_id is None:
                     agent_prefix = "[main]"
@@ -203,19 +222,24 @@ async def find_conference_deadlines(conference_name: str) -> None:
                                 content_str = content_str[:500] + "... (truncated)"
                             error_indicator = " [ERROR]" if block.is_error else ""
                             print(f"[result]{error_indicator} {tool_name}: {content_str}")
-            elif (
-                isinstance(message, ResultMessage)
-                and message.total_cost_usd
-                and message.total_cost_usd > 0
-            ):
-                print(f"\nCost: ${message.total_cost_usd:.4f}")
+            elif isinstance(message, ResultMessage):
+                print(f"[debug] ResultMessage: cost={message.total_cost_usd}, result={getattr(message, 'result', None)}")
+                if message.total_cost_usd and message.total_cost_usd > 0:
+                    print(f"\nCost: ${message.total_cost_usd:.4f}")
+            else:
+                # Catch any other message types
+                print(f"[debug] Unhandled message type: {type(message).__name__}, content: {message}")
     except Exception as e:
         print(f"Error during agent query: {type(e).__name__}: {e}")
         import traceback
 
         traceback.print_exc()
 
-    print(f"\nAgent query completed. Total messages received: {message_count}")
+    print(f"\n[debug] Query loop finished normally (no exception)")
+    print(f"Agent query completed. Total messages received: {message_count}")
+    if message_count <= 1:
+        print(f"[debug] WARNING: Only received init message, Claude never responded!")
+        print(f"[debug] This usually means an API error or authentication issue.")
 
 
 if __name__ == "__main__":
