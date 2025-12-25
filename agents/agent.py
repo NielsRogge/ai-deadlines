@@ -18,7 +18,7 @@ import aiofiles
 
 # Enable info logging (debug is too noisy with Modal's grpc)
 logging.basicConfig(level=logging.INFO)
-# os.environ["ANTHROPIC_LOG"] = "debug"  # Uncomment for SDK debug logs
+os.environ["ANTHROPIC_LOG"] = "debug"  # Enable SDK debug logs
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -153,7 +153,7 @@ async def find_conference_deadlines(conference_name: str) -> None:
         system_prompt=system_prompt,
         permission_mode="bypassPermissions",
         settings=settings_path,
-        mcp_servers=mcp_servers,
+        mcp_servers=None,
         cwd=str(PROJECT_ROOT),
     )
 

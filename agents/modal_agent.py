@@ -8,13 +8,13 @@ Usage:
 
 ```bash
 # Run all conferences once
-modal run agents/modal_agent.py
+uv run modal run agents/modal_agent.py
 
 # Run single conference (for testing)
-modal run agents/modal_agent.py --conference-name neurips
+uv run modal run agents/modal_agent.py --conference-name neurips
 
 # Deploy for weekly scheduled runs
-modal deploy agents/modal_agent.py
+uv runmodal deploy agents/modal_agent.py
 ```
 
 Setup:
@@ -22,7 +22,7 @@ Setup:
 2. Authenticate: uv run modal setup
 3. Create secrets:
    uv run modal secret create anthropic ANTHROPIC_API_KEY=<your-key>
-   uv run modal secret create github-pat GITHUB_PAT=<token-with-repo-and-pr-scope>
+   uv run modal secret create github-token GITHUB_TOKEN=<token-with-repo-and-pr-scope>
    uv run modal secret create exa EXA_API_KEY=<your-key>
 
 Note: The GITHUB_PAT token needs the following scopes:
@@ -106,23 +106,27 @@ app = modal.App(
     image=image,
     secrets=[
         modal.Secret.from_name("anthropic"),
-        modal.Secret.from_name("github-pat"),
+        modal.Secret.from_name("github-token"),
         modal.Secret.from_name("exa"),
     ],
 )
 
 
 def setup_git_and_clone():
-    """Configure git and clone the repository."""
+    """Configure git and clone the repository.
+    
+    This function embeds the PAT directly in the git remote URL to ensure
+    the agent subprocess can push without relying on credential helpers.
+    """
     import os
     import subprocess
 
-    github_pat = os.environ.get("GITHUB_PAT", "")
-    if not github_pat:
-        raise ValueError("GITHUB_PAT environment variable is required")
+    github_token = os.environ.get("GITHUB_TOKEN", "")
+    if not github_token:
+        raise ValueError("GITHUB_TOKEN environment variable is required")
 
     # Set GH_TOKEN for GitHub CLI authentication
-    os.environ["GH_TOKEN"] = github_pat
+    os.environ["GH_TOKEN"] = github_token
 
     # Configure git user
     subprocess.run(
@@ -134,25 +138,26 @@ def setup_git_and_clone():
         check=True,
     )
 
-    # Configure credential helper to use the PAT
-    subprocess.run(
-        ["git", "config", "--global", "credential.helper", "store"],
-        check=True,
+    # Build authenticated URL with token embedded
+    # This ensures the agent subprocess can push without credential helper issues
+    authenticated_url = REPO_URL.replace(
+        "https://github.com/",
+        f"https://x-access-token:{github_token}@github.com/"
     )
-
-    # Store credentials
-    credentials_file = os.path.expanduser("~/.git-credentials")
-    with open(credentials_file, "w") as f:
-        f.write(f"https://x-access-token:{github_pat}@github.com\n")
-    os.chmod(credentials_file, 0o600)
 
     # Clone the repository if it doesn't exist
     if not os.path.exists(REPO_DIR):
         subprocess.run(
-            ["git", "clone", REPO_URL, REPO_DIR],
+            ["git", "clone", authenticated_url, REPO_DIR],
             check=True,
         )
     else:
+        # Ensure remote URL has credentials for pulling
+        subprocess.run(
+            ["git", "remote", "set-url", "origin", authenticated_url],
+            cwd=REPO_DIR,
+            check=True,
+        )
         # Pull latest changes
         subprocess.run(
             ["git", "pull", "--rebase"],
